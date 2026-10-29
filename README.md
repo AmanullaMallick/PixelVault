@@ -121,3 +121,21 @@ pixelvault/
 ---
 
 *License: see `LICENSE`.*
+
+## Android app (Flet)
+
+Preview the UI on Windows (opens a desktop window):
+
+```
+flet run android/main.py
+```
+
+Build the APK with one command, from the repo root:
+
+```
+flet build apk --module-name android.main
+```
+
+The APK is written under `build/apk`. The first build installs the Java and Android SDK tools automatically, which takes a while.
+
+Status: first version. Paths are typed in, which works on desktop. On a phone, file picking and app storage still need wiring to Flet's file picker and storage paths. Verify the build works on the Redmi Note 9 before relying on it.
