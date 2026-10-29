@@ -2,8 +2,12 @@
 and the reverse. Streaming throughout: no step holds the whole archive in memory.
 
 Design notes:
-- Every tile header carries the full per-chunk lists (nonces, ciphertext lengths)
-  and the salt. The lost tile's nonce is therefore copied into every survivor.
+- The per-chunk nonce list and ciphertext length list live in the manifest,
+  which is encrypted when encryption is on and is present in every tile. A lost
+  tile's nonce is therefore recoverable from any k survivors, and nothing about
+  chunk sizes is visible without the passphrase.
+- The plaintext header holds only tile geometry (k, m, shard_len, canvas, chunk
+  size) and the KDF salt and settings needed to derive the key.
 - Chunk AAD binds ciphertext to (file_id, chunk index), so reordering tiles
   fails authentication.
 - Reed-Solomon runs over ciphertext shards, so a missing shard is rebuilt
@@ -27,7 +31,7 @@ from cryptography.exceptions import InvalidTag
 from core import archiver, crypto_engine as ce, ecc_matrix as ecc, image_tiler as tiler
 from core.config import Config
 
-VAULT_VERSION = "1.1"
+VAULT_VERSION = "1.2"
 
 
 def _manifest_aad(file_id: str) -> bytes:
@@ -122,11 +126,6 @@ def encode_vault(
         with open(tar_path, "wb") as f:
             archiver.pack(src, f)
         _report(progress, "archive", 1, 1)
-        manifest = json.dumps({
-            "original_name": src.name,
-            "archive_sha256": _sha256_file(tar_path),
-            "archive_size": tar_path.stat().st_size,
-        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
         # 2. chunk (and encrypt) into shard files, one chunk in memory at a time
         total_bytes = tar_path.stat().st_size
@@ -153,6 +152,16 @@ def encode_vault(
                 ct_lengths.append(len(payload))
                 _report(progress, "encrypt" if key is not None else "chunk", i + 1, n_chunks)
 
+        # the manifest is built after chunking, since it carries the per-chunk lists
+        manifest_doc = {
+            "original_name": src.name,
+            "archive_sha256": _sha256_file(tar_path),
+            "archive_size": tar_path.stat().st_size,
+            "ct_lengths": ct_lengths,
+        }
+        if key is not None:
+            manifest_doc["nonces_hex"] = nonces_hex
+
         # 3. erasure parity, block by block
         k = len(data_paths)
         m = cfg.parity_count(k)
@@ -176,10 +185,9 @@ def encode_vault(
             "is_encrypted": cfg.encryption_enabled,
             "pbkdf2_iterations": cfg.pbkdf2_iterations if cfg.encryption_enabled else None,
             "salt_hex": salt_hex,
-            "nonces_hex": nonces_hex if cfg.encryption_enabled else None,
-            "ct_lengths": ct_lengths,
             "shard_len": shard_len,
         }
+        manifest = json.dumps(manifest_doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
         if cfg.encryption_enabled:
             m_nonce, m_ct = ce.encrypt_chunk(key, manifest, _manifest_aad(file_id))
             common["manifest_nonce_hex"] = m_nonce.hex()
@@ -286,11 +294,11 @@ def decode_vault(
         with open(tar_path, "wb") as tar_f:
             for i in range(k):
                 with open(data_paths[i], "rb") as df:
-                    ct = df.read(h0["ct_lengths"][i])
+                    ct = df.read(manifest["ct_lengths"][i])
                 if key is not None:
                     try:
                         plain = ce.decrypt_chunk(
-                            key, bytes.fromhex(h0["nonces_hex"][i]), ct, _aad(h0["file_id"], i)
+                            key, bytes.fromhex(manifest["nonces_hex"][i]), ct, _aad(h0["file_id"], i)
                         )
                     except InvalidTag:
                         raise ValueError(

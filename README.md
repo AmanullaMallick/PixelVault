@@ -56,7 +56,8 @@ Each PNG tile contains:
 | `chunk_index`, `total_chunks` | yes | Ordering |
 | `k`, `m` | yes | Recovery threshold |
 | `canvas_side`, `chunk_size`, `parity_percent` | yes | Decode without the original device config |
-| `salt`, `nonce` | yes | Per-tile nonce, per-file salt |
+| `salt` | yes | Per-file key-derivation salt |
+| `nonce`, chunk lengths | **encrypted** (in manifest) | Per-chunk nonces and sizes; hidden without the key |
 | `payload_size_bytes` | yes | Usable bytes in this tile |
 | Encrypted manifest (original filename, archive SHA-256) | **encrypted** when encryption is on; plain text otherwise | Restore checks the rebuilt archive against the hash |
 
@@ -66,7 +67,7 @@ Output files use sequential or random names (e.g., `vault_block_01.png`), never 
 
 ```
 File(s) → tar stream → chunks (4 MB)
-        → AES-256-GCM per chunk (unique nonce per tile)   [if enabled]
+        → AES-256-GCM per chunk (unique nonce per chunk)   [if enabled]
         → Reed-Solomon parity across ciphertext chunks
         → tile layout → PNG write (streamed rows, compress_level=0)
 ```

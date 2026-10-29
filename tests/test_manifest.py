@@ -31,6 +31,16 @@ class TestManifest(unittest.TestCase):
             self.assertNotIn("archive_sha256", str(header))
             self.assertNotIn("original_name", str(header))
 
+    def test_chunk_lists_absent_from_plaintext_header(self):
+        tiles = vault.encode_vault(self.src, self.root / "out", self._cfg(), passphrase="pw")
+        for t in tiles:
+            _side, raw = tiler.read_tile(t)
+            header, _ = tiler.unpack_payload(raw)
+            self.assertNotIn("ct_lengths", header)
+            self.assertNotIn("nonces_hex", header)
+            self.assertNotIn("manifest_plain", header)
+            self.assertIn("manifest_ct_hex", header)
+
     def test_tampered_archive_hash_is_detected_when_unencrypted(self):
         tiles = vault.encode_vault(self.src, self.root / "out", self._cfg(encryption_enabled=False))
         # Rewrite every tile with a manifest whose hash is wrong.
