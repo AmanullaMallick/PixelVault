@@ -24,7 +24,13 @@ if str(ROOT) not in sys.path:
 import flet as ft  # noqa: E402
 
 from core import vault  # noqa: E402
-from core.config import MAX_PARITY_PERCENT, load_settings, save_settings  # noqa: E402
+from core.config import MAX_PARITY_PERCENT, load_settings, reset_settings, save_settings  # noqa: E402
+
+
+def icon(name: str, fallback: str):
+    """Material icon by name; falls back if this Flet build lacks that name."""
+    value = getattr(ft.Icons, name, None)
+    return value if value is not None else getattr(ft.Icons, fallback)
 
 
 async def main(page: ft.Page):
@@ -48,16 +54,22 @@ async def main(page: ft.Page):
 
     reload_settings()
 
-    # --- widgets: main screen
+    # --- widgets: encode tab
 
     sources_text = ft.Text("No files chosen.", size=14)
     out = ft.TextField(label="Output folder", value=state["default_folder"] or "")
     parity = ft.TextField(label=f"Parity % (0 = none, max {MAX_PARITY_PERCENT})",
                           value=str(state["cfg"].rs_parity_percent))
-    pw_encode = ft.TextField(label="Passphrase (for encoding)", password=True)
+    pw_encode = ft.TextField(label="Passphrase", password=True)
+
+    # --- widgets: restore tab
+
     tiles = ft.TextField(label="Folder containing tiles")
     dest = ft.TextField(label="Restore into")
-    pw_restore = ft.TextField(label="Passphrase (for restoring)", password=True)
+    pw_restore = ft.TextField(label="Passphrase", password=True)
+
+    # --- shared status (below the tabs, visible on every tab)
+
     status = ft.Text("Ready.", size=14)
     bar = ft.ProgressBar(value=0, visible=False)
 
@@ -213,7 +225,7 @@ async def main(page: ft.Page):
 
         run_in_background("Restoring", work)
 
-    # --- settings
+    # --- settings tab
 
     profile_dd = ft.Dropdown(
         label="Profile",
@@ -230,6 +242,14 @@ async def main(page: ft.Page):
     settings_parity = ft.TextField(label="Parity %", value=str(state["cfg"].rs_parity_percent))
     settings_status = ft.Text("", size=14)
 
+    def fill_settings_fields():
+        profile_dd.value = state["profile"]
+        enc_dd.value = "on" if state["cfg"].encryption_enabled else "off"
+        settings_folder.value = state["default_folder"] or ""
+        settings_parity.value = str(state["cfg"].rs_parity_percent)
+        out.value = state["default_folder"] or ""
+        parity.value = str(state["cfg"].rs_parity_percent)
+
     def on_save_settings(e):
         try:
             parity_value = int(settings_parity.value.strip() or "0")
@@ -244,44 +264,81 @@ async def main(page: ft.Page):
             page.update()
             return
         reload_settings()
-        out.value = state["default_folder"] or ""
-        parity.value = str(state["cfg"].rs_parity_percent)
-        settings_status.value = f"Saved to {config_path}"
+        fill_settings_fields()
+        settings_status.value = "Saved."
         page.update()
 
-    settings_view = ft.Column(visible=False, controls=[
-        ft.Text("Settings", size=22, weight=ft.FontWeight.BOLD),
-        profile_dd, enc_dd, settings_folder, settings_parity,
-        ft.Button("Save", on_click=on_save_settings),
-        settings_status,
-        ft.Button("Back", on_click=lambda e: toggle_settings(False)),
-    ])
+    def on_reset_settings(e):
+        try:
+            reset_settings(config_path)
+        except ValueError as exc:
+            settings_status.value = f"Not reset: {exc}"
+            page.update()
+            return
+        reload_settings()
+        fill_settings_fields()
+        settings_status.value = "Factory settings restored."
+        page.update()
 
-    main_view = ft.Column(controls=[
-        ft.Text("PixelVault", size=26, weight=ft.FontWeight.BOLD),
-        ft.Button("Settings", on_click=lambda e: toggle_settings(True)),
-        ft.Text("Encode", size=18, weight=ft.FontWeight.BOLD),
+    settings_panel = [
+        profile_dd,
+        enc_dd,
+        settings_folder,
+        settings_parity,
+        ft.Row([
+            ft.Button("Save", on_click=on_save_settings),
+            ft.Button("Set to default", on_click=on_reset_settings),
+        ]),
+        settings_status,
+    ]
+
+    # --- layout: three tabs with icons; the active section name sits under the app title
+
+    titles = ["Encode", "Restore", "Settings"]
+    heading = ft.Text("Encode", size=18, weight=ft.FontWeight.BOLD)
+
+    def on_tab_change(e):
+        heading.value = titles[tabs.selected_index]
+        page.update()
+
+    encode_tab = ft.Column(controls=[
         ft.Button("Choose files or folders", on_click=choose_sources),
         sources_text,
         ft.Row([out, ft.Button("Browse", on_click=choose_out)]),
         parity,
         pw_encode,
         ft.Button("Encode", on_click=on_encode),
-        ft.Text("Restore", size=18, weight=ft.FontWeight.BOLD),
+    ])
+    restore_tab = ft.Column(controls=[
         ft.Row([tiles, ft.Button("Browse", on_click=choose_tiles)]),
         ft.Row([dest, ft.Button("Browse", on_click=choose_dest)]),
         pw_restore,
         ft.Button("Restore", on_click=on_restore),
+    ])
+    settings_tab = ft.Column(controls=settings_panel)
+
+    tabs = ft.Tabs(
+        length=3,
+        selected_index=0,
+        expand=True,
+        on_change=on_tab_change,
+        content=ft.Column(expand=True, controls=[
+            ft.TabBar(tabs=[
+                ft.Tab(icon=icon("LOCK", "HOME")),
+                ft.Tab(icon=icon("LOCK_OPEN", "HOME")),
+                ft.Tab(icon=icon("SETTINGS", "HOME")),
+            ]),
+            ft.TabBarView(expand=True, controls=[encode_tab, restore_tab, settings_tab]),
+        ]),
+    )
+
+    page.add(
+        ft.Text("PixelVault", size=26, weight=ft.FontWeight.BOLD),
+        heading,
+        tabs,
         bar,
         status,
-    ])
-
-    def toggle_settings(show_settings: bool):
-        main_view.visible = not show_settings
-        settings_view.visible = show_settings
-        page.update()
-
-    page.add(main_view, settings_view)
+    )
 
 
 ft.run(main)

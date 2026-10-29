@@ -64,3 +64,16 @@ class TestSaveSettings(unittest.TestCase):
             save_settings(self.path, {"rs_parity_percent": 99})
         data = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(data, {"profile": "default"})
+
+
+class TestResetSettings(unittest.TestCase):
+    def test_reset_restores_factory_values(self):
+        from core.config import DEFAULT_SETTINGS, reset_settings
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "config.json"
+        path.write_text(json.dumps({"profile": "redmi", "rs_parity_percent": 0,
+                                    "encryption_enabled": False,
+                                    "default_output_folder": "D:/x"}), encoding="utf-8")
+        reset_settings(path)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), DEFAULT_SETTINGS)

@@ -123,3 +123,16 @@ def save_settings(path, updates: dict) -> None:
         tmp.unlink(missing_ok=True)
         raise
     os.replace(tmp, path)
+
+
+DEFAULT_SETTINGS = {
+    "profile": "default",
+    "default_output_folder": None,
+    "rs_parity_percent": 10,
+    "encryption_enabled": True,
+}
+
+
+def reset_settings(path) -> None:
+    """Restore the factory settings in the file at `path`."""
+    save_settings(path, dict(DEFAULT_SETTINGS))
