@@ -102,6 +102,7 @@ pixelvault/
 
 ## 8. Known limitations
 
+- **Tile count reveals approximate file size.** Without the passphrase, the number of tiles shows the file size to within one chunk (4 MB by default). This is a documented limit, not a bug. Padding every vault to a fixed size would hide it at a storage cost.
 - **Platform limits are unverified.** The 75 MB and 100 MP figures are carried over from earlier notes and are not yet checked against current Google Photos documentation. They are config defaults and can be changed.
 - **Content scanning risk.** Encrypted tiles look like random noise. Cloud providers may flag high-entropy images. Check the provider's terms before relying on cloud backup.
 - **Pure-Python PNG encoding** may be slow on large tiles. Encode time is to be measured in Milestone 1.

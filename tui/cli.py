@@ -16,15 +16,20 @@ from pathlib import Path
 
 from core import image_tiler as tiler
 from core import vault
-from core.config import Config
+from core.config import Config, load_settings
 from tui.progress import make_callback
 
+ROOT_CONFIG = Path(__file__).resolve().parent.parent / "config.json"
 
-def _config(args) -> Config:
-    cfg = Config.redmi_note_9() if args.profile == "redmi" else Config()
+
+def _config(args):
+    """Settings from config.json, with --profile overriding the file's profile."""
+    cfg, default_folder, profile = load_settings(ROOT_CONFIG)
+    if args.profile and args.profile != profile:
+        cfg = Config.redmi_note_9() if args.profile == "redmi" else Config()
     if args.no_encrypt:
         cfg.encryption_enabled = False
-    return cfg
+    return cfg, default_folder
 
 
 def _confirm(question: str) -> bool:
@@ -32,7 +37,14 @@ def _confirm(question: str) -> bool:
 
 
 def cmd_encode(args) -> int:
-    cfg = _config(args)
+    cfg, default_folder = _config(args)
+    out_dir = args.out_dir
+    if out_dir is None:
+        if default_folder and _confirm(f"Use your default folder ({default_folder})?"):
+            out_dir = default_folder
+        else:
+            print("No output folder given. Pass one, or set default_output_folder in config.json.", file=sys.stderr)
+            return 1
     warning = vault.export_warning(Path(args.source), cfg)
     if warning and not args.yes:
         print(f"Notice: {warning}", file=sys.stderr)
@@ -47,7 +59,7 @@ def cmd_encode(args) -> int:
             print("Passphrases do not match.", file=sys.stderr)
             return 2
     tiles = vault.encode_vault(
-        Path(args.source), Path(args.out_dir), cfg,
+        Path(args.source), Path(out_dir), cfg,
         passphrase=passphrase, progress=make_callback(),
     )
     print(f"Wrote {len(tiles)} tiles to {tiles[0].parent}")
@@ -88,9 +100,10 @@ def main(argv=None) -> int:
 
     enc = sub.add_parser("encode", help="pack a file or folder into PNG tiles")
     enc.add_argument("source")
-    enc.add_argument("out_dir")
+    enc.add_argument("out_dir", nargs="?", help="output folder; defaults to config.json's default_output_folder")
     enc.add_argument("--no-encrypt", action="store_true")
-    enc.add_argument("--profile", choices=["default", "redmi"], default="default")
+    enc.add_argument("--profile", choices=["default", "redmi"], default=None,
+                     help="overrides the profile in config.json")
     enc.add_argument("--yes", action="store_true", help="skip the parity storage prompt")
     enc.set_defaults(func=cmd_encode)
 

@@ -58,3 +58,42 @@ class Config:
             workers=4,
             ecc_block_bytes=256 * 1024,
         )
+
+
+SETTINGS_KEYS = {"default_output_folder", "profile"}
+
+
+def load_settings(path) -> tuple["Config", str | None, str]:
+    """Read a config.json file. Returns (Config, default_output_folder, profile).
+
+    Unknown keys are rejected so typos do not pass silently. Missing file
+    yields defaults. Only plain JSON is read; no code is executed.
+    """
+    import dataclasses
+    import json
+    from pathlib import Path
+
+    path = Path(path)
+    if not path.exists():
+        cfg = Config()
+        cfg.validate()
+        return cfg, None, "default"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: top level must be a JSON object")
+    fields = {f.name for f in dataclasses.fields(Config)}
+    unknown = set(data) - fields - SETTINGS_KEYS
+    if unknown:
+        raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
+    profile = data.pop("profile", "default")
+    default_folder = data.pop("default_output_folder", None)
+    cfg = Config(**data)
+    if profile == "redmi":
+        base = Config.redmi_note_9()
+        base_vals = dataclasses.asdict(base)
+        base_vals.update(data)
+        cfg = Config(**base_vals)
+    elif profile != "default":
+        raise ValueError(f"{path}: profile must be 'default' or 'redmi'")
+    cfg.validate()
+    return cfg, default_folder, profile
