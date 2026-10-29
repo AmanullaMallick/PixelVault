@@ -14,6 +14,8 @@ Design notes:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,7 +27,19 @@ from cryptography.exceptions import InvalidTag
 from core import archiver, crypto_engine as ce, ecc_matrix as ecc, image_tiler as tiler
 from core.config import Config
 
-VAULT_VERSION = "1.0"
+VAULT_VERSION = "1.1"
+
+
+def _manifest_aad(file_id: str) -> bytes:
+    return f"manifest:{file_id}".encode("ascii")
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 ProgressCb = Optional[Callable[[str, int, int], None]]
 
@@ -108,6 +122,11 @@ def encode_vault(
         with open(tar_path, "wb") as f:
             archiver.pack(src, f)
         _report(progress, "archive", 1, 1)
+        manifest = json.dumps({
+            "original_name": src.name,
+            "archive_sha256": _sha256_file(tar_path),
+            "archive_size": tar_path.stat().st_size,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
         # 2. chunk (and encrypt) into shard files, one chunk in memory at a time
         total_bytes = tar_path.stat().st_size
@@ -161,6 +180,12 @@ def encode_vault(
             "ct_lengths": ct_lengths,
             "shard_len": shard_len,
         }
+        if cfg.encryption_enabled:
+            m_nonce, m_ct = ce.encrypt_chunk(key, manifest, _manifest_aad(file_id))
+            common["manifest_nonce_hex"] = m_nonce.hex()
+            common["manifest_ct_hex"] = m_ct.hex()
+        else:
+            common["manifest_plain"] = manifest.decode("utf-8")
 
         def write_one(idx: int) -> None:
             header = {**common, "shard_index": idx, "is_parity": idx >= k}
@@ -245,6 +270,18 @@ def decode_vault(
                 raise ValueError("passphrase required to restore an encrypted vault")
             key = ce.derive_key(passphrase, bytes.fromhex(h0["salt_hex"]), h0["pbkdf2_iterations"])
 
+        if key is not None:
+            try:
+                manifest_bytes = ce.decrypt_chunk(
+                    key, bytes.fromhex(h0["manifest_nonce_hex"]),
+                    bytes.fromhex(h0["manifest_ct_hex"]), _manifest_aad(h0["file_id"]),
+                )
+            except InvalidTag:
+                raise ValueError("decryption failed: wrong passphrase or tampered tile") from None
+        else:
+            manifest_bytes = h0["manifest_plain"].encode("utf-8")
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+
         tar_path = work / "archive.tar"
         with open(tar_path, "wb") as tar_f:
             for i in range(k):
@@ -264,7 +301,9 @@ def decode_vault(
                 tar_f.write(plain)
                 _report(progress, "decrypt", i + 1, k)
 
-        # 4. extract, refusing to overwrite anything already in dest_dir
+        # 4. verify the whole archive against the manifest hash, then extract
+        if _sha256_file(tar_path) != manifest["archive_sha256"]:
+            raise ValueError("archive hash mismatch: restored data does not match the original")
         with open(tar_path, "rb") as tar_f:
             members = archiver.list_names(tar_f)
         clashes = [n for n in members if (dest_dir / n).exists()]

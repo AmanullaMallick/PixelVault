@@ -20,7 +20,7 @@ A local, offline utility that packs files into lossless PNG images, encrypts the
 - **Streaming, not monolithic buffers.** Input and output are processed in chunks so memory use stays bounded.
 - **Every parameter is configurable.** Nothing relevant is hardcoded. Platform limits are defaults, not constants.
 - **Each tile is self-describing.** A single surviving tile carries the parameters needed to decode it.
-- **Metadata is minimal in plaintext.** Original filename and master hash are encrypted, not stored in clear text.
+- **Metadata stays private.** When encryption is on, the original filename and the archive's SHA-256 live in an encrypted manifest. With encryption off, they are stored in plain text.
 
 ## 3. Configuration
 
@@ -58,7 +58,7 @@ Each PNG tile contains:
 | `canvas_side`, `chunk_size`, `parity_percent` | yes | Decode without the original device config |
 | `salt`, `nonce` | yes | Per-tile nonce, per-file salt |
 | `payload_size_bytes` | yes | Usable bytes in this tile |
-| Original filename, master SHA-256 | **encrypted** | Not readable without the key |
+| Encrypted manifest (original filename, archive SHA-256) | **encrypted** when encryption is on; plain text otherwise | Restore checks the rebuilt archive against the hash |
 
 Output files use sequential or random names (e.g., `vault_block_01.png`), never names that encode metadata.
 
