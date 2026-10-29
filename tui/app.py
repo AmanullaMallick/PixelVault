@@ -10,6 +10,7 @@ which is the documented way to update widgets from another thread.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -17,7 +18,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Button, Footer, Header, Input, Log, ProgressBar, Static
 
 from core import vault
-from core.config import Config, load_settings
+from core.config import MAX_PARITY_PERCENT, Config, load_settings
 from tui.progress import STAGE_LABELS
 
 ROOT_CONFIG = Path(__file__).resolve().parent.parent / "config.json"
@@ -60,6 +61,12 @@ class PixelVaultApp(App):
             with Horizontal(classes="row"):
                 yield Input(placeholder="Passphrase (blank if unencrypted)", password=True, id="pw")
                 yield Input(placeholder="Repeat passphrase", password=True, id="pw2")
+            with Horizontal(classes="row"):
+                yield Input(
+                    value=str(self._cfg.rs_parity_percent),
+                    placeholder=f"Parity % (0 = none, max {MAX_PARITY_PERCENT})",
+                    id="parity",
+                )
             with Horizontal(classes="row"):
                 yield Button("Encode", variant="primary", id="encode")
 
@@ -130,7 +137,17 @@ class PixelVaultApp(App):
                 self._log("Passphrases do not match.")
                 return
 
-        warning = vault.export_warning(Path(src), self._cfg)
+        try:
+            parity = int(self._value("parity") or "0")
+        except ValueError:
+            self._log("Parity must be a whole number.")
+            return
+        if not 0 <= parity <= MAX_PARITY_PERCENT:
+            self._log(f"Parity must be between 0 and {MAX_PARITY_PERCENT}.")
+            return
+        cfg = dataclasses.replace(self._cfg, rs_parity_percent=parity)
+
+        warning = vault.export_warning(Path(src), cfg)
         if warning and self._pending_warning != warning:
             self._pending_warning = warning
             self._log(f"Notice: {warning} Press Encode again to continue.")
@@ -140,16 +157,16 @@ class PixelVaultApp(App):
         self._set_buttons_disabled(True)
         self._log("Encoding started.")
         self.run_worker(
-            lambda: self._encode_worker(Path(src), Path(out), pw or None),
+            lambda: self._encode_worker(Path(src), Path(out), pw or None, cfg),
             thread=True, exclusive=True, group="vault", name="encode",
         )
 
-    def _encode_worker(self, src: Path, out: Path, passphrase: str | None) -> None:
+    def _encode_worker(self, src: Path, out: Path, passphrase: str | None, cfg: Config) -> None:
         def progress(stage: str, done: int, total: int) -> None:
             self.call_from_thread(self._set_progress, stage, done, total)
 
         try:
-            tiles = vault.encode_vault(src, out, self._cfg, passphrase=passphrase, progress=progress)
+            tiles = vault.encode_vault(src, out, cfg, passphrase=passphrase, progress=progress)
             message = f"Wrote {len(tiles)} tiles to {tiles[0].parent}"
         except Exception as exc:  # report any failure in the log instead of crashing the screen
             message = f"Error: {exc}"
