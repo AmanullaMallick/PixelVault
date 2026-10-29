@@ -25,12 +25,13 @@ ROOT_CONFIG = Path(__file__).resolve().parent.parent / "config.json"
 
 CSS = """
 Screen { layout: vertical; }
+#controls { height: 1fr; }
 .row { height: auto; margin: 0 0 1 0; }
 .row Input { width: 1fr; }
 .row Button { margin-left: 1; }
-#stage { height: 1; margin: 1 0 0 0; }
-ProgressBar { margin: 0 0 1 0; }
-Log { height: 1fr; border: round $primary; }
+#stage { height: 1; margin: 0 1; }
+ProgressBar { height: 1; margin: 0 1 1 1; }
+Log { height: 10; border: round $primary; margin: 0 1 1 1; }
 """
 
 
@@ -48,7 +49,7 @@ class PixelVaultApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with VerticalScroll():
+        with VerticalScroll(id="controls"):
             yield Static("Encode a file or folder into PNG tiles")
             with Horizontal(classes="row"):
                 yield Input(placeholder="Source file or folder", id="src")
@@ -78,9 +79,9 @@ class PixelVaultApp(App):
             with Horizontal(classes="row"):
                 yield Button("Restore", variant="success", id="restore")
 
-            yield Static("", id="stage")
-            yield ProgressBar(total=None, show_eta=True, id="bar")
-            yield Log(id="log", highlight=False)
+        yield Static("", id="stage")
+        yield ProgressBar(total=None, show_eta=True, id="bar")
+        yield Log(id="log", highlight=False)
         yield Footer()
 
     def on_mount(self) -> None:
