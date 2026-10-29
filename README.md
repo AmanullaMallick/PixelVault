@@ -133,7 +133,7 @@ flet run android/main.py
 Build the APK with one command, from the repo root:
 
 ```
-flet build apk --module-name android.main
+flet build apk --module-name main
 ```
 
 The APK is written under `build/apk`. The first build installs the Java and Android SDK tools automatically, which takes a while.
