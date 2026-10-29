@@ -61,25 +61,31 @@ def _tile_name(shard_index: int) -> str:
     return f"vault_block_{shard_index + 1:02d}.png"
 
 
-def export_warning(src: Path, cfg: Config) -> str | None:
-    """Warning text if parity adds whole images to the output, else None.
+def parity_warning_for_size(total_bytes: int, cfg: Config) -> str | None:
+    """Warning text if parity adds whole images for `total_bytes` of input, else None.
 
-    Size is estimated from the source bytes (tar headers add a little more),
-    so the figure is approximate.
+    The size is an estimate from source bytes; tar headers add a little more.
     """
     cfg.validate()
-    src = Path(src)
-    total = sum(p.stat().st_size for p in src.rglob("*") if p.is_file()) if src.is_dir() else src.stat().st_size
-    k = max(1, -(-total // cfg.chunk_size))
+    k = max(1, -(-total_bytes // cfg.chunk_size))
     m = cfg.parity_count(k)
     if m == 0:
         return None
-    extra = m
-    pct = 100 * extra / k
+    pct = 100 * m / k
     return (
-        f"Parity at {cfg.rs_parity_percent}% adds {extra} extra image(s) "
+        f"Parity at {cfg.rs_parity_percent}% adds {m} extra image(s) "
         f"(about +{pct:.0f}% storage). Continue, or set parity to 0?"
     )
+
+
+def export_warning(src: Path, cfg: Config) -> str | None:
+    """Warning for a file or folder. See parity_warning_for_size."""
+    src = Path(src)
+    if src.is_dir():
+        total = sum(p.stat().st_size for p in src.rglob("*") if p.is_file())
+    else:
+        total = src.stat().st_size
+    return parity_warning_for_size(total, cfg)
 
 
 def scan_folder(folder: Path) -> dict[str, list[Path]]:

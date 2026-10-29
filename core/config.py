@@ -97,3 +97,29 @@ def load_settings(path) -> tuple["Config", str | None, str]:
         raise ValueError(f"{path}: profile must be 'default' or 'redmi'")
     cfg.validate()
     return cfg, default_folder, profile
+
+
+def save_settings(path, updates: dict) -> None:
+    """Merge `updates` into the JSON file at `path` and save it.
+
+    The merged result is validated with load_settings before it replaces the
+    file, so an invalid value never reaches disk. Other existing keys are kept.
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    path = Path(path)
+    existing = {}
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    merged = {**existing, **updates}
+    tmp = path.with_suffix(".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    try:
+        load_settings(tmp)  # raises ValueError on bad keys or values
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)

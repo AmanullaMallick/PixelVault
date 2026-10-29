@@ -42,3 +42,25 @@ class TestSettings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSaveSettings(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "config.json"
+
+    def test_save_merges_and_keeps_other_keys(self):
+        from core.config import save_settings
+        self.path.write_text(json.dumps({"profile": "redmi"}), encoding="utf-8")
+        save_settings(self.path, {"rs_parity_percent": 0})
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(data, {"profile": "redmi", "rs_parity_percent": 0})
+
+    def test_invalid_value_is_not_written(self):
+        from core.config import save_settings
+        self.path.write_text(json.dumps({"profile": "default"}), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            save_settings(self.path, {"rs_parity_percent": 99})
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(data, {"profile": "default"})
