@@ -5,10 +5,16 @@ written). Layout is systematic: the first k shards are the data itself, the
 last m are parity computed with a Cauchy matrix, which is MDS, so every
 k-row submatrix of [I; C] is invertible.
 
-Shards must all be the same length. The caller pads the last chunk.
+Two interfaces:
+- encode() / decode(): in-memory, for small inputs and tests.
+- encode_files() / decode_files(): work block by block on files, so memory
+  use is k * block_bytes, not the whole data set.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable, Optional
 
 # --- GF(256) arithmetic, primitive polynomial 0x11d (same as common RS codecs)
 
@@ -37,13 +43,13 @@ def _gf_inv(a: int) -> int:
     return _EXP[255 - _LOG[a]]
 
 
-# Precomputed multiply-by-constant tables, so a whole shard can be scaled with
-# bytes.translate() (C speed) instead of a Python loop per byte.
+# Precomputed multiply-by-constant tables: scaling a block is one bytes.translate
+# call (C speed) instead of a Python loop per byte.
 _MUL_TABLE = [bytes(_gf_mul(c, b) for b in range(256)) for c in range(256)]
 
 
-def _scale(shard: bytes, c: int) -> bytes:
-    return shard.translate(_MUL_TABLE[c])
+def _scale(block: bytes, c: int) -> bytes:
+    return block.translate(_MUL_TABLE[c])
 
 
 def _xor_bytes(parts: list[bytes], length: int) -> bytes:
@@ -53,7 +59,7 @@ def _xor_bytes(parts: list[bytes], length: int) -> bytes:
     return acc.to_bytes(length, "big")
 
 
-# --- Matrix helpers
+# --- matrix helpers
 
 def _cauchy_row(x: int, ys: list[int]) -> list[int]:
     return [_gf_inv(x ^ y) for y in ys]
@@ -85,7 +91,7 @@ def _invert(matrix: list[list[int]]) -> list[list[int]]:
     return [row[n:] for row in aug]
 
 
-# --- Public API
+# --- in-memory API
 
 def encode(data_shards: list[bytes], m: int) -> list[bytes]:
     """Return the m parity shards for the given equal-length data shards."""
@@ -109,11 +115,7 @@ def encode(data_shards: list[bytes], m: int) -> list[bytes]:
 
 
 def decode(shards: dict[int, bytes], k: int, m: int) -> list[bytes]:
-    """Rebuild the k data shards from any k surviving shards.
-
-    `shards` maps shard index (0..k+m-1) to its bytes. Indices >= k are parity.
-    Raises ValueError if fewer than k shards are supplied.
-    """
+    """Rebuild the k data shards from any k surviving shards (in memory)."""
     if len(shards) < k:
         raise ValueError(f"need at least {k} shards, got {len(shards)}")
     if all(i in shards for i in range(k)):
@@ -124,11 +126,97 @@ def decode(shards: dict[int, bytes], k: int, m: int) -> list[bytes]:
     if any(len(shards[i]) != length for i in chosen):
         raise ValueError("all shards must have the same length")
 
-    sub = [_generator_row(i, k, m) for i in chosen]
-    inv = _invert(sub)  # data = inv * survivors
-
+    inv = _invert([_generator_row(i, k, m) for i in chosen])
     data = []
     for l in range(k):
         parts = [_scale(shards[chosen[r]], inv[l][r]) for r in range(k)]
         data.append(_xor_bytes(parts, length))
     return data
+
+
+# --- streaming API (block by block, bounded memory)
+
+ProgressFn = Optional[Callable[[int, int], None]]
+
+
+def _read_block(f, n: int) -> bytes:
+    """Read exactly n bytes, zero-padding past end of file."""
+    block = f.read(n)
+    if len(block) < n:
+        block += b"\x00" * (n - len(block))
+    return block
+
+
+def encode_files(
+    data_paths: list[Path],
+    parity_paths: list[Path],
+    length: int,
+    block: int,
+    progress: ProgressFn = None,
+) -> None:
+    """Compute parity files from data files, `block` bytes at a time.
+
+    Each data file is zero-padded to `length` bytes. Each parity file is
+    written with exactly `length` bytes.
+    """
+    k, m = len(data_paths), len(parity_paths)
+    if m == 0:
+        return
+    if k == 0:
+        raise ValueError("need at least one data shard")
+    if k + m > 256:
+        raise ValueError("k + m must be <= 256 for GF(256)")
+    if block < 1:
+        raise ValueError("block must be >= 1")
+
+    coeffs = [_generator_row(k + j, k, m) for j in range(m)]
+    ins = [open(p, "rb") for p in data_paths]
+    outs = [open(p, "wb") for p in parity_paths]
+    try:
+        for off in range(0, length, block):
+            n = min(block, length - off)
+            blocks = [_read_block(f, n) for f in ins]
+            for j, out in enumerate(outs):
+                parts = [_scale(blocks[l], coeffs[j][l]) for l in range(k)]
+                out.write(_xor_bytes(parts, n))
+            if progress:
+                progress(min(off + n, length), length)
+    finally:
+        for f in ins + outs:
+            f.close()
+
+
+def decode_files(
+    survivor_paths: dict[int, Path],
+    out_paths: list[Path],
+    k: int,
+    m: int,
+    length: int,
+    block: int,
+    progress: ProgressFn = None,
+) -> None:
+    """Rebuild k data shard files from any k surviving shard files, block by block.
+
+    Each survivor file must contain exactly `length` bytes.
+    """
+    if len(survivor_paths) < k:
+        raise ValueError(f"need at least {k} shards, got {len(survivor_paths)}")
+    if block < 1:
+        raise ValueError("block must be >= 1")
+
+    chosen = sorted(survivor_paths)[:k]
+    inv = _invert([_generator_row(i, k, m) for i in chosen])
+    ins = {i: open(survivor_paths[i], "rb") for i in chosen}
+    outs = [open(p, "wb") for p in out_paths]
+    try:
+        for off in range(0, length, block):
+            n = min(block, length - off)
+            blocks = {i: _read_block(ins[i], n) for i in chosen}
+            for l, out in enumerate(outs):
+                parts = [_scale(blocks[chosen[r]], inv[l][r]) for r in range(k)]
+                out.write(_xor_bytes(parts, n))
+            if progress:
+                progress(min(off + n, length), length)
+    finally:
+        for f in list(ins.values()) + outs:
+            f.close()
