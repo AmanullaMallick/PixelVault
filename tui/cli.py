@@ -1,9 +1,10 @@
 """Terminal front end (stdlib only) with a live progress bar.
 
-    python -m tui.cli encode <file-or-folder> <out-dir> [--no-encrypt] [--profile redmi|default]
-    python -m tui.cli decode <tile> [<tile> ...] --out <dest-dir>
+    python -m tui.cli encode <file-or-folder> <out-dir> [--no-encrypt] [--profile redmi|default] [--yes]
+    python -m tui.cli decode <folder | tile.png ...> --out <dest-dir> [--vault ID]
 
-The passphrase is read with getpass, never from the command line.
+Passphrases are read with getpass, never from the command line.
+Each encoded vault goes into its own subfolder of <out-dir>.
 """
 
 from __future__ import annotations
@@ -22,12 +23,23 @@ from tui.progress import make_callback
 def _config(args) -> Config:
     cfg = Config.redmi_note_9() if args.profile == "redmi" else Config()
     if args.no_encrypt:
-        cfg.encryption_enabled = False  # parity setting is kept as configured
+        cfg.encryption_enabled = False
     return cfg
+
+
+def _confirm(question: str) -> bool:
+    return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
 
 
 def cmd_encode(args) -> int:
     cfg = _config(args)
+    warning = vault.export_warning(Path(args.source), cfg)
+    if warning and not args.yes:
+        print(f"Notice: {warning}", file=sys.stderr)
+        if not _confirm("Continue with parity?"):
+            print("Cancelled.", file=sys.stderr)
+            return 1
+
     passphrase = None
     if cfg.encryption_enabled:
         passphrase = getpass.getpass("Passphrase: ")
@@ -38,25 +50,32 @@ def cmd_encode(args) -> int:
         Path(args.source), Path(args.out_dir), cfg,
         passphrase=passphrase, progress=make_callback(),
     )
-    print(f"Wrote {len(tiles)} tiles to {args.out_dir}")
+    print(f"Wrote {len(tiles)} tiles to {tiles[0].parent}")
     return 0
 
 
-class _Discard:
-    def write(self, data: bytes) -> int:
-        return len(data)
+def _resolve_tiles(args) -> list[Path]:
+    if len(args.tiles) == 1 and Path(args.tiles[0]).is_dir():
+        groups = vault.scan_folder(Path(args.tiles[0]))
+        if not groups:
+            raise ValueError("no PixelVault tiles found in that folder")
+        if args.vault:
+            matches = [fid for fid in groups if fid.startswith(args.vault)]
+            if len(matches) != 1:
+                raise ValueError(f"--vault '{args.vault}' matches {len(matches)} vaults")
+            return groups[matches[0]]
+        if len(groups) > 1:
+            lines = [f"  {fid[:8]}  ({len(ts)} tiles)" for fid, ts in groups.items()]
+            raise ValueError("folder holds several vaults; choose one with --vault:\n" + "\n".join(lines))
+        return next(iter(groups.values()))
+    return [Path(t) for t in args.tiles]
 
 
 def cmd_decode(args) -> int:
-    # Ask for a passphrase only if the vault is encrypted (read from the first tile's header).
-    header = tiler.read_tile_stream(Path(args.tiles[0]), _Discard())
-    passphrase = None
-    if header["is_encrypted"]:
-        passphrase = getpass.getpass("Passphrase: ")
-    names, warnings = vault.decode_vault(
-        [Path(t) for t in args.tiles], Path(args.out),
-        passphrase=passphrase, progress=make_callback(),
-    )
+    tiles = _resolve_tiles(args)
+    header = tiler.read_tile_stream(tiles[0], vault._Discard())
+    passphrase = getpass.getpass("Passphrase: ") if header["is_encrypted"] else None
+    names, warnings = vault.decode_vault(tiles, Path(args.out), passphrase=passphrase, progress=make_callback())
     for w in warnings:
         print(f"Notice: {w}", file=sys.stderr)
     print(f"Restored {', '.join(names)} into {args.out}")
@@ -72,11 +91,13 @@ def main(argv=None) -> int:
     enc.add_argument("out_dir")
     enc.add_argument("--no-encrypt", action="store_true")
     enc.add_argument("--profile", choices=["default", "redmi"], default="default")
+    enc.add_argument("--yes", action="store_true", help="skip the parity storage prompt")
     enc.set_defaults(func=cmd_encode)
 
-    dec = sub.add_parser("decode", help="restore from tiles")
-    dec.add_argument("tiles", nargs="+")
+    dec = sub.add_parser("decode", help="restore from tiles or a folder of tiles")
+    dec.add_argument("tiles", nargs="+", help="a folder, or one or more tile files")
     dec.add_argument("--out", required=True)
+    dec.add_argument("--vault", help="file_id prefix, when a folder holds several vaults")
     dec.set_defaults(func=cmd_decode)
 
     args = parser.parse_args(argv)

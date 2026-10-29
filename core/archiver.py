@@ -28,6 +28,12 @@ def iter_chunks(fileobj: BinaryIO, size: int) -> Iterator[bytes]:
         yield block
 
 
+def list_names(fileobj: BinaryIO) -> list[str]:
+    """Member names of a tar stream, without extracting anything."""
+    with tarfile.open(fileobj=fileobj, mode="r:") as tar:
+        return tar.getnames()
+
+
 def extract(fileobj: BinaryIO, dest: Path) -> list[str]:
     """Extract a tar stream into `dest`. Returns member names."""
     dest = Path(dest)

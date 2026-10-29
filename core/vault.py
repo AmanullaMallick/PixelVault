@@ -43,6 +43,44 @@ def _tile_name(shard_index: int) -> str:
     return f"vault_block_{shard_index + 1:02d}.png"
 
 
+def export_warning(src: Path, cfg: Config) -> str | None:
+    """Warning text if parity adds whole images to the output, else None.
+
+    Size is estimated from the source bytes (tar headers add a little more),
+    so the figure is approximate.
+    """
+    cfg.validate()
+    src = Path(src)
+    total = sum(p.stat().st_size for p in src.rglob("*") if p.is_file()) if src.is_dir() else src.stat().st_size
+    k = max(1, -(-total // cfg.chunk_size))
+    m = cfg.parity_count(k)
+    if m == 0:
+        return None
+    extra = m
+    pct = 100 * extra / k
+    return (
+        f"Parity at {cfg.rs_parity_percent}% adds {extra} extra image(s) "
+        f"(about +{pct:.0f}% storage). Continue, or set parity to 0?"
+    )
+
+
+def scan_folder(folder: Path) -> dict[str, list[Path]]:
+    """Group PNG tiles in `folder` by vault file_id. Names are ignored; headers decide."""
+    groups: dict[str, list[Path]] = {}
+    for p in sorted(Path(folder).glob("*.png")):
+        try:
+            header = tiler.read_tile_stream(p, _Discard())
+        except (ValueError, OSError):
+            continue  # not a PixelVault tile
+        groups.setdefault(header["file_id"], []).append(p)
+    return groups
+
+
+class _Discard:
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+
 def encode_vault(
     src: Path,
     out_dir: Path,
@@ -55,9 +93,12 @@ def encode_vault(
     if cfg.encryption_enabled and not passphrase:
         raise ValueError("passphrase required when encryption is enabled")
 
-    src, out_dir = Path(src), Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    src = Path(src)
     file_id = uuid.uuid4().hex
+    out_dir = Path(out_dir) / f"vault_{file_id[:8]}"
+    if out_dir.exists():
+        raise ValueError(f"{out_dir} already exists; refusing to overwrite")
+    out_dir.mkdir(parents=True)
 
     with tempfile.TemporaryDirectory(prefix="pv_enc_", dir=work_dir) as work_s:
         work = Path(work_s)
@@ -223,7 +264,12 @@ def decode_vault(
                 tar_f.write(plain)
                 _report(progress, "decrypt", i + 1, k)
 
-        # 4. extract
+        # 4. extract, refusing to overwrite anything already in dest_dir
+        with open(tar_path, "rb") as tar_f:
+            members = archiver.list_names(tar_f)
+        clashes = [n for n in members if (dest_dir / n).exists()]
+        if clashes:
+            raise ValueError(f"would overwrite existing files: {', '.join(clashes[:5])}")
         with open(tar_path, "rb") as tar_f:
             names = archiver.extract(tar_f, dest_dir)
     return names, warnings
