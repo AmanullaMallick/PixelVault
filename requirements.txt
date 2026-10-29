@@ -1,0 +1,3 @@
+# Runtime dependencies (used by core/)
+# Tested with Python 3.13.
+cryptography==50.0.1   # PBKDF2-HMAC-SHA256 and AES-256-GCM
