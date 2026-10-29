@@ -12,7 +12,7 @@ class TestDashboard(unittest.IsolatedAsyncioTestCase):
     async def test_starts_and_encode_with_no_source_does_not_crash(self):
         from tui.app import PixelVaultApp
         app = PixelVaultApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 60)) as pilot:
             await pilot.click("#encode")
             await pilot.pause()
             self.assertTrue(app.is_running)
@@ -22,7 +22,7 @@ class TestDashboard(unittest.IsolatedAsyncioTestCase):
     async def test_restore_with_missing_folder_does_not_crash(self):
         from tui.app import PixelVaultApp
         app = PixelVaultApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 60)) as pilot:
             app.query_one("#tiles").value = "Z:/definitely/not/here"
             app.query_one("#dest").value = "Z:/restore"
             await pilot.click("#restore")
