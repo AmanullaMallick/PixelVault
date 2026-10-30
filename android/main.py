@@ -45,6 +45,7 @@ async def main(page: ft.Page):
 
     docs_dir = Path(await storage.get_application_documents_directory())
     temp_dir = Path(await storage.get_temporary_directory())
+    temp_dir.mkdir(parents=True, exist_ok=True)
     config_path = docs_dir / "PixelVault" / "config.json"
 
     state = {"cfg": None, "default_folder": None, "profile": "default", "sources": [], "pending": None}
@@ -193,6 +194,7 @@ async def main(page: ft.Page):
                 made = vault.encode_vault(
                     src, Path(out.value.strip()), cfg,
                     passphrase=pw_encode.value or None, progress=set_progress,
+                    work_dir=temp_dir,
                 )
                 return f"Wrote {len(made)} tiles to {made[0].parent}"
             finally:
@@ -220,6 +222,7 @@ async def main(page: ft.Page):
             names, warnings = vault.decode_vault(
                 tile_paths, Path(dest.value.strip()),
                 passphrase=pw_restore.value or None, progress=set_progress,
+                work_dir=temp_dir,
             )
             return "\n".join([f"Restored {', '.join(names)}."] + [f"Notice: {w}" for w in warnings])
 
