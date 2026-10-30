@@ -12,7 +12,9 @@ import dataclasses
 import shutil
 import sys
 import threading
+import traceback
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 # Make the repo root importable (for `core`) in the desktop preview and in the
@@ -25,6 +27,22 @@ import flet as ft  # noqa: E402
 
 from core import vault  # noqa: E402
 from core.config import MAX_PARITY_PERCENT, load_settings, reset_settings, save_settings  # noqa: E402
+
+
+BUILD_MARKER = "diag-2026-10-30-encode-restore"
+LOG_NAME = "pixelvault.log"
+
+
+def make_logger(log_path: Path):
+    """Append timestamped lines to log_path. Never raises, so logging cannot break the app."""
+    def log(message: str) -> None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+        except OSError:
+            pass
+    return log
 
 
 def icon(name: str, fallback: str):
@@ -47,6 +65,8 @@ async def main(page: ft.Page):
     temp_dir = Path(await storage.get_temporary_directory())
     temp_dir.mkdir(parents=True, exist_ok=True)
     config_path = docs_dir / "PixelVault" / "config.json"
+    log = make_logger(docs_dir / "PixelVault" / LOG_NAME)
+    log(f"startup build={BUILD_MARKER} docs={docs_dir} temp={temp_dir}")
 
     state = {"cfg": None, "default_folder": None, "profile": "default", "sources": [], "pending": None}
 
@@ -80,7 +100,12 @@ async def main(page: ft.Page):
         status.value = message
         page.update()
 
+    last_stage = {"name": None}
+
     def set_progress(stage: str, done: int, total: int):
+        if stage != last_stage["name"]:
+            last_stage["name"] = stage
+            log(f"stage={stage} total={total}")
         if total > 0:
             bar.value = done / total
         status.value = f"{stage}: {done}/{total}"
@@ -89,10 +114,13 @@ async def main(page: ft.Page):
     def run_in_background(label: str, work):
         def target():
             bar.visible = True
+            log(f"{label}: started")
             show(f"{label}...")
             try:
                 message = work()
+                log(f"{label}: finished: {message}")
             except Exception as exc:  # show errors on screen instead of closing the app
+                log(f"{label}: failed: {exc}\n{traceback.format_exc()}")
                 message = f"Error: {exc}"
             bar.visible = False
             bar.value = 0
