@@ -29,7 +29,7 @@ from core import vault  # noqa: E402
 from core.config import MAX_PARITY_PERCENT, load_settings, reset_settings, save_settings  # noqa: E402
 
 
-BUILD_MARKER = "diag-2026-10-30-encode-restore"
+BUILD_MARKER = "app-folder-work-2026-10-31"
 LOG_NAME = "pixelvault.log"
 
 
@@ -62,11 +62,13 @@ async def main(page: ft.Page):
     page.services.append(storage)
 
     docs_dir = Path(await storage.get_application_documents_directory())
-    temp_dir = Path(await storage.get_temporary_directory())
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    # All scratch work happens in the app's own documents folder (always writable).
+    # Only finished files are copied to the folder the user picked.
+    work_dir = docs_dir / "PixelVault" / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
     config_path = docs_dir / "PixelVault" / "config.json"
     log = make_logger(docs_dir / "PixelVault" / LOG_NAME)
-    log(f"startup build={BUILD_MARKER} docs={docs_dir} temp={temp_dir}")
+    log(f"startup build={BUILD_MARKER} docs={docs_dir} work={work_dir}")
 
     state = {"cfg": None, "default_folder": None, "profile": "default", "sources": [], "pending": None}
 
@@ -210,7 +212,7 @@ async def main(page: ft.Page):
                 if len(sources) == 1:
                     src = sources[0]
                 else:
-                    staged = temp_dir / f"pv_input_{uuid.uuid4().hex[:8]}" / "input"
+                    staged = work_dir / f"pv_input_{uuid.uuid4().hex[:8]}" / "input"
                     staged.mkdir(parents=True)
                     for s in sources:
                         target = staged / s.name
@@ -220,11 +222,21 @@ async def main(page: ft.Page):
                             shutil.copy2(s, target)
                     src = staged
                 made = vault.encode_vault(
-                    src, Path(out.value.strip()), cfg,
+                    src, work_dir / "out", cfg,
                     passphrase=pw_encode.value or None, progress=set_progress,
-                    work_dir=temp_dir,
+                    work_dir=work_dir,
                 )
-                return f"Wrote {len(made)} tiles to {made[0].parent}"
+                target = Path(out.value.strip()) / made[0].parent.name
+                try:
+                    target.mkdir(parents=True, exist_ok=True)
+                    for tile in made:
+                        shutil.copy2(tile, target / tile.name)
+                except OSError as exc:
+                    log(f"copy to output failed: {exc}")
+                    return (f"Tiles were made but could not be copied to {target} ({exc}). "
+                            f"They are kept in {made[0].parent}.")
+                shutil.rmtree(made[0].parent, ignore_errors=True)
+                return f"Wrote {len(made)} tiles to {target}"
             finally:
                 if staged is not None:
                     shutil.rmtree(staged.parent, ignore_errors=True)
@@ -247,12 +259,32 @@ async def main(page: ft.Page):
         tile_paths = next(iter(groups.values()))
 
         def work():
+            restore_dir = work_dir / "restore_out"
             names, warnings = vault.decode_vault(
-                tile_paths, Path(dest.value.strip()),
+                tile_paths, restore_dir,
                 passphrase=pw_restore.value or None, progress=set_progress,
-                work_dir=temp_dir,
+                work_dir=work_dir,
             )
-            return "\n".join([f"Restored {', '.join(names)}."] + [f"Notice: {w}" for w in warnings])
+            dest_dir = Path(dest.value.strip())
+            clashes = [n for n in names if (dest_dir / n).exists()]
+            if clashes:
+                shutil.rmtree(restore_dir, ignore_errors=True)
+                raise ValueError(f"would overwrite existing files: {', '.join(clashes[:5])}")
+            try:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                for n in names:
+                    src_item = restore_dir / n
+                    if src_item.is_dir():
+                        shutil.copytree(src_item, dest_dir / n)
+                    else:
+                        shutil.copy2(src_item, dest_dir / n)
+            except OSError as exc:
+                log(f"copy to restore folder failed: {exc}")
+                return (f"Restored, but could not copy to {dest_dir} ({exc}). "
+                        f"Files are kept in {restore_dir}.")
+            shutil.rmtree(restore_dir, ignore_errors=True)
+            return "\n".join([f"Restored {', '.join(names)} into {dest_dir}."]
+                              + [f"Notice: {w}" for w in warnings])
 
         run_in_background("Restoring", work)
 
