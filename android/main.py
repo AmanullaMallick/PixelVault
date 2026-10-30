@@ -67,7 +67,8 @@ async def main(page: ft.Page):
     work_dir = docs_dir / "PixelVault" / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
     config_path = docs_dir / "PixelVault" / "config.json"
-    log = make_logger(docs_dir / "PixelVault" / LOG_NAME)
+    log_path = docs_dir / "PixelVault" / LOG_NAME
+    log = make_logger(log_path)
     log(f"startup build={BUILD_MARKER} docs={docs_dir} work={work_dir}")
 
     state = {"cfg": None, "default_folder": None, "profile": "default", "sources": [], "pending": None}
@@ -304,6 +305,18 @@ async def main(page: ft.Page):
     settings_folder = ft.TextField(label="Default output folder", value=state["default_folder"] or "")
     settings_parity = ft.TextField(label="Parity %", value=str(state["cfg"].rs_parity_percent))
     settings_status = ft.Text("", size=14)
+    log_view = ft.TextField(
+        label="Log (last 200 lines). Long-press to select and copy.",
+        read_only=True, multiline=True, min_lines=8, max_lines=20, value="",
+    )
+
+    def on_view_log(e):
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            log_view.value = "\n".join(lines[-200:]) or "Log is empty."
+        except OSError:
+            log_view.value = "No log yet. Run encode or restore first."
+        page.update()
 
     def fill_settings_fields():
         profile_dd.value = state["profile"]
@@ -353,6 +366,8 @@ async def main(page: ft.Page):
             ft.Button("Set to default", on_click=on_reset_settings),
         ]),
         settings_status,
+        ft.Button("View log", on_click=on_view_log),
+        log_view,
     ]
 
     # --- layout: three tabs with icons; the active section name sits under the app title
