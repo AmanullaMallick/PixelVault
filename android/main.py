@@ -11,6 +11,7 @@ square by square as tiles are made. Navigation sits at the bottom for thumb reac
 """
 
 import dataclasses
+import os
 import shutil
 import sys
 import threading
@@ -26,6 +27,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import flet as ft  # noqa: E402
+
+try:
+    import flet_permission_handler as fph  # noqa: E402
+except ImportError:  # desktop preview without the extension installed
+    fph = None
 
 from android.helpers import describe_plan, lit_cells, overall_progress, stage_label  # noqa: E402
 from core import vault  # noqa: E402
@@ -46,6 +52,7 @@ ON_INK = "#E6EBF1"
 CELL_OFF = "#2B3947"
 CELL_ON = "#4FD1B5"
 CELL_ERR = "#F97066"
+CELL_WARN = "#F5B94A"
 ERROR = "#B42318"
 
 GRID_COLS = 18
@@ -53,6 +60,10 @@ GRID_ROWS = 4
 CELL = 14
 GAP = 3
 GRID_CELLS = GRID_COLS * GRID_ROWS
+
+# Android 11+ blocks writes to shared folders such as /storage/emulated/0 unless the
+# user grants "All files access". The app's own documents folder needs no permission.
+IS_ANDROID = bool(os.environ.get("ANDROID_ROOT"))
 
 
 def make_logger(log_path: Path):
@@ -101,6 +112,7 @@ async def main(page: ft.Page):
     page.services.append(picker)
     storage = ft.StoragePaths()
     page.services.append(storage)
+    perm = fph.PermissionHandler() if fph is not None else None
 
     docs_dir = Path(await storage.get_application_documents_directory())
     # All scratch work happens in the app's own documents folder (always writable).
@@ -148,10 +160,24 @@ async def main(page: ft.Page):
     panel_title = ft.Text("", size=15, weight=ft.FontWeight.W_600, color=ON_INK)
     panel_body = ft.Text("", size=13, color=ON_INK, selectable=True)
     panel_actions = ft.Row(visible=False, wrap=True, spacing=8)
+
+    def hide_panel(e):
+        if not state["busy"]:
+            panel.visible = False
+            panel_actions.visible = False
+            page.update()
+
     panel = ft.Container(
         visible=False, bgcolor=INK, padding=16,
         border_radius=ft.BorderRadius(top_left=14, top_right=14, bottom_left=0, bottom_right=0),
-        content=ft.Column(spacing=10, controls=[panel_title, grid, panel_body, panel_actions]),
+        content=ft.Column(spacing=10, controls=[
+            ft.Row(vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
+                ft.Container(content=panel_title, expand=True),
+                ft.IconButton(icon=ft.Icons.CLOSE, icon_color=ON_INK, tooltip="Dismiss",
+                              on_click=hide_panel),
+            ]),
+            grid, panel_body, panel_actions,
+        ]),
     )
 
     def paint_cells(count: int, color: str):
@@ -209,8 +235,9 @@ async def main(page: ft.Page):
                 log(f"{label}: finished: {message}")
                 if kind == "ok":
                     paint_cells(GRID_CELLS, CELL_ON)
-                else:
-                    tone, title = CELL_ERR, "Finished with a problem"
+                else:  # work finished but something needs attention: amber, not success green
+                    tone, title = CELL_WARN, "Finished with a problem"
+                    paint_cells(GRID_CELLS, CELL_WARN)
             except Exception as exc:  # show errors on screen instead of closing the app
                 log(f"{label}: failed: {exc}\n{traceback.format_exc()}")
                 message, tone, title = str(exc), CELL_ERR, f"{label} failed"
@@ -219,6 +246,21 @@ async def main(page: ft.Page):
             show(title, message, grid_visible=True, tone=tone)
 
         threading.Thread(target=target, daemon=True).start()
+
+    async def ensure_storage_access(*folders: str) -> bool:
+        """On Android, make sure the app may use shared folders. True when it is fine to continue."""
+        if not IS_ANDROID or perm is None:
+            return True
+        if not any(f.startswith("/storage/") for f in folders):
+            return True  # only the app's own folders are involved
+        target = fph.Permission.MANAGE_EXTERNAL_STORAGE
+        if await perm.get_status(target) == fph.PermissionStatus.GRANTED:
+            return True
+        show("Allow file access",
+             "Android needs your OK before PixelVault can use folders outside the app. "
+             "Turn on the switch for PixelVault on the next screen, come back, and press the button again.")
+        await perm.request(target)
+        return await perm.get_status(target) == fph.PermissionStatus.GRANTED
 
     def total_size(paths: list[Path]) -> int:
         total = 0
@@ -346,7 +388,7 @@ async def main(page: ft.Page):
         refresh_plan()
         show("Recovery data turned off", "Press Encode to continue.")
 
-    def on_encode(e):
+    async def on_encode(e):
         if state["busy"]:
             return
         panel_actions.visible = False  # clear buttons left by an earlier recovery-data notice
@@ -359,6 +401,8 @@ async def main(page: ft.Page):
         cfg = dataclasses.replace(state["cfg"], rs_parity_percent=parity_value())
         if cfg.encryption_enabled and not pw_encode.value:
             show("Enter a passphrase", "Encryption is on, so tiles need a passphrase.")
+            return
+        if not await ensure_storage_access(out.value.strip(), *state["sources"]):
             return
         warning = vault.parity_warning_for_size(state["source_bytes"], cfg)
         if warning:
@@ -403,11 +447,13 @@ async def main(page: ft.Page):
             dest.value = folder
             page.update()
 
-    def on_restore(e):
+    async def on_restore(e):
         if state["busy"]:
             return
         if not tiles.value.strip() or not dest.value.strip():
             show("Choose both folders", "Pick the folder with the tiles and a folder to restore into.")
+            return
+        if not await ensure_storage_access(tiles.value.strip(), dest.value.strip()):
             return
         groups = vault.scan_folder(Path(tiles.value.strip()))
         if not groups:

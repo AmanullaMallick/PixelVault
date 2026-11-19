@@ -2,4 +2,5 @@
 # Pinned to versions the Android package index provides (flet build apk).
 cryptography==48.0.0   # core: PBKDF2-HMAC-SHA256 and AES-256-GCM
 flet==1.0.5            # android/main.py: the mobile UI (version installed on Windows)
+flet-permission-handler==1.0.5  # android/main.py: asks for All files access on Android 11+ (same version as flet)
 certifi==2026.10.23     # required by the Android runtime's startup script (SSL certificates)
