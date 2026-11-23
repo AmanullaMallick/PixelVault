@@ -133,8 +133,10 @@ flet run android/main.py
 Build the APK with one command, from the repo root:
 
 ```
-flet build apk --module-name main
+flet build apk --module-name main --android-permissions android.permission.MANAGE_EXTERNAL_STORAGE=True
 ```
+
+The permission lets the app write tiles into folders you pick on shared storage. On Android 11 and later, the app asks for "All files access" the first time you encode or restore to such a folder: switch it on for PixelVault in the screen that opens, return to the app, and press the button again. This permission is restricted on Google Play, so it suits a sideloaded personal app.
 
 The APK is written under `build/apk`. The first build installs the Java and Android SDK tools automatically, which takes a while.
 
